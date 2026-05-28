@@ -1,94 +1,97 @@
-"""Simple scene definition: spheres and planes for G-buffer rendering."""
+"""Cornell Box scene (взят из ЛР4) с присвоением object_id каждому объекту.
+
+object_id:
+    1 - пол
+    2 - потолок
+    3 - задняя стена
+    4 - левая (красная) стена
+    5 - правая (зелёная) стена
+    6 - короткий белый блок
+    7 - высокий зеркальный блок
+    8 - источник света (на потолке)
+"""
+
+from typing import List, Tuple
 
 import numpy as np
-from dataclasses import dataclass
-from typing import Optional, Tuple
+
+from vec3 import vec3
+from geometry import Triangle, Material
+from camera import Camera
 
 
-@dataclass
-class Material:
-    color: np.ndarray      # RGB diffuse colour
-    emission: np.ndarray   # RGB emission
-    roughness: float = 1.0
-
-
-@dataclass
-class HitInfo:
-    t: float
-    point: np.ndarray
-    normal: np.ndarray
-    obj_id: int
-    material: Material
-
-
-class Sphere:
-    def __init__(self, center, radius, material, obj_id):
-        self.center = np.array(center, dtype=float)
-        self.radius = float(radius)
-        self.material = material
-        self.obj_id = obj_id
-
-    def intersect(self, origin, direction) -> Optional[HitInfo]:
-        oc = origin - self.center
-        a = np.dot(direction, direction)
-        b = 2.0 * np.dot(oc, direction)
-        c = np.dot(oc, oc) - self.radius ** 2
-        disc = b * b - 4 * a * c
-        if disc < 0:
-            return None
-        sq = np.sqrt(disc)
-        t = (-b - sq) / (2 * a)
-        if t < 1e-4:
-            t = (-b + sq) / (2 * a)
-        if t < 1e-4:
-            return None
-        point = origin + t * direction
-        normal = (point - self.center) / self.radius
-        return HitInfo(t, point, normal, self.obj_id, self.material)
-
-
-class Plane:
-    """Axis-aligned plane (infinite)."""
-    def __init__(self, axis: int, value: float, side: int, material, obj_id):
-        self.axis = axis     # 0=x, 1=y, 2=z
-        self.value = value
-        self.side = side     # +1 or -1 normal direction
-        self.material = material
-        self.obj_id = obj_id
-
-    def intersect(self, origin, direction) -> Optional[HitInfo]:
-        d = direction[self.axis]
-        if abs(d) < 1e-9:
-            return None
-        t = (self.value - origin[self.axis]) / d
-        if t < 1e-4:
-            return None
-        point = origin + t * direction
-        normal = np.zeros(3)
-        normal[self.axis] = float(self.side)
-        return HitInfo(t, point, normal, self.obj_id, self.material)
-
-
-def build_cornell_box():
-    """Cornell Box: walls + 2 spheres + light (sphere on top)."""
-    white  = Material(np.array([0.73, 0.73, 0.73]), np.zeros(3))
-    red    = Material(np.array([0.65, 0.05, 0.05]), np.zeros(3))
-    green  = Material(np.array([0.12, 0.45, 0.15]), np.zeros(3))
-    blue_m = Material(np.array([0.10, 0.20, 0.70]), np.zeros(3))
-    yellow = Material(np.array([0.80, 0.70, 0.10]), np.zeros(3))
-    light  = Material(np.array([0.0,  0.0,  0.0 ]), np.array([15.0, 15.0, 15.0]))
-
-    objects = [
-        # Walls
-        Plane(0,  0.0,  1, red,   obj_id=1),   # left
-        Plane(0,  5.5, -1, green, obj_id=2),   # right
-        Plane(1,  0.0,  1, white, obj_id=3),   # floor
-        Plane(1,  5.5, -1, white, obj_id=4),   # ceiling
-        Plane(2, 10.0, -1, white, obj_id=5),   # back
-        # Spheres
-        Sphere([2.0, 1.0, 7.5], 1.0, blue_m,  obj_id=6),
-        Sphere([3.8, 1.2, 6.0], 1.2, yellow,  obj_id=7),
-        # Light sphere near ceiling
-        Sphere([2.75, 5.0, 7.0], 0.6, light,  obj_id=0),
+def _quad(v0, v1, v2, v3, mat: Material, obj_id: int) -> List[Triangle]:
+    return [
+        Triangle(v0, v1, v2, mat, object_id=obj_id),
+        Triangle(v0, v2, v3, mat, object_id=obj_id),
     ]
-    return objects
+
+
+def build_cornell_box() -> Tuple[List[Triangle], List[Triangle], Camera]:
+    white  = Material(diffuse=vec3(0.73, 0.73, 0.73))
+    red    = Material(diffuse=vec3(0.65, 0.05, 0.05))
+    green  = Material(diffuse=vec3(0.12, 0.45, 0.15))
+    mirror = Material(specular=vec3(0.95, 0.95, 0.95))
+    light_mat = Material(emission=vec3(17.0, 12.0, 4.0))
+
+    tris: List[Triangle] = []
+
+    # Floor (id=1)
+    tris += _quad(vec3(552.8, 0, 0), vec3(0, 0, 0),
+                  vec3(0, 0, 559.2), vec3(549.6, 0, 559.2), white, 1)
+
+    # Ceiling (id=2)
+    tris += _quad(vec3(556.0, 548.8, 0), vec3(556.0, 548.8, 559.2),
+                  vec3(0, 548.8, 559.2), vec3(0, 548.8, 0), white, 2)
+
+    # Back wall (id=3)
+    tris += _quad(vec3(549.6, 0, 559.2), vec3(0, 0, 559.2),
+                  vec3(0, 548.8, 559.2), vec3(556.0, 548.8, 559.2), white, 3)
+
+    # Left wall - red (id=4)
+    tris += _quad(vec3(552.8, 0, 0), vec3(549.6, 0, 559.2),
+                  vec3(556.0, 548.8, 559.2), vec3(556.0, 548.8, 0), red, 4)
+
+    # Right wall - green (id=5)
+    tris += _quad(vec3(0, 0, 559.2), vec3(0, 0, 0),
+                  vec3(0, 548.8, 0), vec3(0, 548.8, 559.2), green, 5)
+
+    # Short white block (id=6)
+    bh = 165.0
+    tris += _quad(vec3(130, bh, 65), vec3(82, bh, 225),
+                  vec3(240, bh, 272), vec3(290, bh, 114), white, 6)
+    tris += _quad(vec3(290, 0, 114), vec3(290, bh, 114),
+                  vec3(240, bh, 272), vec3(240, 0, 272), white, 6)
+    tris += _quad(vec3(130, 0, 65), vec3(130, bh, 65),
+                  vec3(290, bh, 114), vec3(290, 0, 114), white, 6)
+    tris += _quad(vec3(82, 0, 225), vec3(82, bh, 225),
+                  vec3(130, bh, 65), vec3(130, 0, 65), white, 6)
+    tris += _quad(vec3(240, 0, 272), vec3(240, bh, 272),
+                  vec3(82, bh, 225), vec3(82, 0, 225), white, 6)
+
+    # Tall mirror block (id=7)
+    th = 330.0
+    tris += _quad(vec3(423, th, 247), vec3(265, th, 296),
+                  vec3(314, th, 456), vec3(472, th, 406), mirror, 7)
+    tris += _quad(vec3(423, 0, 247), vec3(423, th, 247),
+                  vec3(472, th, 406), vec3(472, 0, 406), mirror, 7)
+    tris += _quad(vec3(472, 0, 406), vec3(472, th, 406),
+                  vec3(314, th, 456), vec3(314, 0, 456), mirror, 7)
+    tris += _quad(vec3(314, 0, 456), vec3(314, th, 456),
+                  vec3(265, th, 296), vec3(265, 0, 296), mirror, 7)
+    tris += _quad(vec3(265, 0, 296), vec3(265, th, 296),
+                  vec3(423, th, 247), vec3(423, 0, 247), mirror, 7)
+
+    # Ceiling light (id=8)
+    light_tris = _quad(vec3(343, 548.7, 227), vec3(343, 548.7, 332),
+                       vec3(213, 548.7, 332), vec3(213, 548.7, 227), light_mat, 8)
+    tris += light_tris
+
+    cam = Camera(
+        eye=vec3(278, 273, -800),
+        target=vec3(278, 273, 0),
+        fov_deg=39.3,
+        width=512,
+        height=512,
+    )
+    return tris, light_tris, cam

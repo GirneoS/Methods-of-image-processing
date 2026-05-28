@@ -1,81 +1,67 @@
 """
-Verification of bilateral filter results.
+Верификация фильтрации (ЛР5).
 
-Checks:
-1. Per-object energy conservation: Σ g(p) ≈ Σ f(p)  for each object O
-2. Peak Signal-to-Noise Ratio improvement (PSNR) vs reference (high-spp render)
-3. Edge preservation: std-dev inside flat regions vs near edges
+1) Сохранение энергии (физическая корректность):
+    для каждого object_id сумма яркости до и после фильтрации должна совпадать.
+2) Подавление шума: сравнение std(noisy) vs std(filtered).
 """
 
 import numpy as np
 
 
 def luminance(img: np.ndarray) -> np.ndarray:
-    """(H,W,3) → (H,W) luminance."""
     return 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
 
 
-def energy_conservation(noisy: np.ndarray, filtered: np.ndarray,
-                         obj_id: np.ndarray) -> dict:
-    """
-    Per-object sum of luminance before and after filtering.
-    Returns dict: obj_id → (sum_before, sum_after, relative_error %).
-    """
-    lum_n = luminance(noisy)
-    lum_f = luminance(filtered)
-    ids = np.unique(obj_id)
-    results = {}
-    for oid in ids:
-        mask = (obj_id == oid)
-        sb = float(lum_n[mask].sum())
-        sa = float(lum_f[mask].sum())
+def energy_per_object(noisy: np.ndarray, filtered: np.ndarray,
+                      obj_id: np.ndarray) -> dict:
+    ln, lf = luminance(noisy), luminance(filtered)
+    out = {}
+    for oid in np.unique(obj_id):
+        m = obj_id == oid
+        sb = float(ln[m].sum())
+        sa = float(lf[m].sum())
         rel = abs(sa - sb) / (sb + 1e-9) * 100
-        results[int(oid)] = (sb, sa, rel)
-    return results
+        out[int(oid)] = (sb, sa, rel)
+    return out
 
 
-def psnr(img_a: np.ndarray, img_b: np.ndarray, max_val: float = None) -> float:
-    """PSNR between two images."""
-    if max_val is None:
-        max_val = float(max(img_a.max(), img_b.max()))
-    mse = float(np.mean((img_a.astype(float) - img_b.astype(float)) ** 2))
-    if mse < 1e-12:
-        return float('inf')
-    return 10 * np.log10(max_val ** 2 / mse)
-
-
-def noise_reduction(noisy: np.ndarray, filtered: np.ndarray,
-                     reference: np.ndarray | None = None) -> dict:
-    """Compute noise statistics."""
-    std_noisy    = float(np.std(noisy))
-    std_filtered = float(np.std(filtered))
-    result = {
-        "std_noisy":    std_noisy,
-        "std_filtered": std_filtered,
-        "noise_reduction_%": (1 - std_filtered / (std_noisy + 1e-9)) * 100,
+def noise_stats(noisy: np.ndarray, filtered: np.ndarray) -> dict:
+    sn, sf = float(np.std(noisy)), float(np.std(filtered))
+    return {
+        "std_noisy": sn,
+        "std_filtered": sf,
+        "reduction_%": (1 - sf / (sn + 1e-9)) * 100,
     }
-    if reference is not None:
-        result["psnr_noisy_vs_ref"]    = psnr(noisy,    reference)
-        result["psnr_filtered_vs_ref"] = psnr(filtered, reference)
-    return result
 
 
-def print_report(energy: dict, noise: dict) -> None:
-    print("\n== Energy conservation (per object) ==")
-    print(f"{'ObjID':>6}  {'Sum before':>12}  {'Sum after':>12}  {'Err%':>8}")
-    print("-" * 46)
-    total_before = total_after = 0.0
+OBJECT_NAMES = {
+    -1: "fon (miss)",
+    1:  "pol (floor)",
+    2:  "potolok (ceiling)",
+    3:  "zadnyaya stena (back)",
+    4:  "levaya stena (red)",
+    5:  "pravaya stena (green)",
+    6:  "korotkij blok (white)",
+    7:  "vysokij blok (mirror)",
+    8:  "istochnik sveta",
+}
+
+
+def print_report(energy: dict, noise: dict, title: str = "filter") -> None:
+    print(f"\n== {title}: energy conservation per object ==")
+    print(f"{'id':>3}  {'name':<24} {'sum before':>12}  {'sum after':>12}  {'err %':>7}")
+    print("-" * 70)
+    tb = ta = 0.0
     for oid, (sb, sa, rel) in sorted(energy.items()):
-        print(f"{oid:6d}  {sb:12.4f}  {sa:12.4f}  {rel:7.3f}%")
-        total_before += sb
-        total_after  += sa
-    rel_total = abs(total_after - total_before) / (total_before + 1e-9) * 100
-    print("-" * 46)
-    print(f"{'TOTAL':>6}  {total_before:12.4f}  {total_after:12.4f}  {rel_total:7.3f}%")
+        name = OBJECT_NAMES.get(oid, f"obj_{oid}")
+        print(f"{oid:>3}  {name:<24} {sb:12.2f}  {sa:12.2f}  {rel:6.3f}%")
+        tb += sb; ta += sa
+    rel_t = abs(ta - tb) / (tb + 1e-9) * 100
+    print("-" * 70)
+    print(f"{'TOT':>3}  {'TOTAL':<24} {tb:12.2f}  {ta:12.2f}  {rel_t:6.3f}%")
 
-    print("\n== Noise reduction ==")
-    for k, v in noise.items():
-        if isinstance(v, float):
-            print(f"  {k:<32} {v:.4f}")
-        else:
-            print(f"  {k:<32} {v}")
+    print(f"\n== {title}: noise reduction ==")
+    print(f"  std noisy    : {noise['std_noisy']:.4f}")
+    print(f"  std filtered : {noise['std_filtered']:.4f}")
+    print(f"  reduction    : {noise['reduction_%']:.2f}%")
